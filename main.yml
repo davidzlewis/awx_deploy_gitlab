@@ -1,35 +1,79 @@
 ---
 - name: "Install GitLab"
-  hosts: all 
+  hosts: all
   become: yes
 
+  vars_files:
+    - vars/main.yml
+
   tasks:
-  - name: "Install dependancies"
-    yum:
-      - curl
-      - policycoreutils
-      - openssh-server
-      - openssh-clients
-    state: latest
+    - name: "Install dependancies"
+      yum:
+        name:
+          - curl
+          - policycoreutils
+          - openssh-server
+          - openssh-clients
+        state: latest
 
-  - name: "Start/Enable SSH"
-    service:
-      name: sshd
-      state: started
-      enabled: yes
+    - name: "Start/Enable SSH"
+      service:
+        name: sshd
+        state: started
+        enabled: yes
 
-  - name: "Set Firewall rules"
-    firewalld:
-      service: http https
-      permanent: yes
-      state: enabled
+    - name: "Set Firewall rules"
+      firewalld:
+        service: "{{ item }}"
+        permanent: yes
+        state: enabled
+      with_items:
+        - http
+        - https
 
-  - name: "Download Gitlab installer"
-    git_url: 
-      url: https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.rpm.sh
-      dest: /tmp/gitlab_installer.sh
-      mode: 0774
+    - name: "Ensure /tmp exists"
+      file:
+        path: /tmp
+        state: directory
 
-  - name: "Run installer"
-    shell: /tmp/gitlab_install.sh >> /tmp/gitlab_install.log
+    - name: "Download Gitlab Repo installer"
+      get_url:
+        url: https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.rpm.sh
+        dest: /tmp/gitlab_install.sh
+        mode: 0774
 
+    - name: "Check for existing repositories"
+      stat:
+        path: /etc/yum.repos.d/gitlab_gitlab-ce.repo
+      register: gitlab_repo
+
+    - name: "Run Gitlab Repo install"
+      shell: /tmp/gitlab_install.sh >> /tmp/gitlab_install.log
+      when: gitlab_repo.stat.exists == False
+
+    - name: "Import GitLab GPG keys"
+      rpm_key:
+        key: "{{ item }}"
+        state: present
+      with_items:
+        - https://packages.gitlab.com/gitlab/gitlab-ce/gpgkey/gitlab-gitlab-ce-3D645A26AB9FBD22.pub.gpg
+        - https://packages.gitlab.com/gitlab/gitlab-ce/gpgkey
+
+    - name: "Install Gitlab CE"
+      yum:
+        name: gitlab-ce
+        state: latest
+
+    - name: "Configure GitLab"
+      lineinfile:
+        path: /etc/gitlab/gitlab.rb
+        regex: '^external_url'
+        line: 'external_url "{{ ext_url }}"'
+      notify:
+        - Reconfigure Gitlab
+
+
+#  sudo gitlab-ctl reconfigure
+  handlers:
+    - name: "Reconfigure Gitlab"
+      command: gitlab-ctl reconfigure
